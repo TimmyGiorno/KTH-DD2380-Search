@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+
+"""
+Code for KTH DD2380 HT24 Assignment: Fishing Derby Search.
+
+Members：Bingchu Zhao (Timmy), Yiyao Zhang
+Email：bingchu@kth.se, yiyaoz@kth.se
+"""
+
 import math
 import random
 import time
@@ -7,7 +15,7 @@ from fishing_game_core.game_tree import Node
 from fishing_game_core.player_utils import PlayerController
 from fishing_game_core.shared import ACTION_TO_STR, TYPE_TO_SCORE
 
-# Requirement from Kattis
+# Requirement from Kattis.
 TIME_LIMIT = 0.075
 
 class PlayerControllerHuman(PlayerController):
@@ -32,7 +40,7 @@ class PlayerControllerMinimax(PlayerController):
 
     def __init__(self):
         super(PlayerControllerMinimax, self).__init__()
-        self.start_time = None
+        self.start_time = 0
         self.cache = dict()
 
     def player_loop(self):
@@ -68,73 +76,111 @@ class PlayerControllerMinimax(PlayerController):
         x = abs(pt2[0] - pt1[0])
         return min(x, 20 - x) + abs(pt2[1] - pt1[1])
 
-    def heuristic_func(
-        self,
-        current_node: Node,
-    ) -> float:
-
-        current_player = current_node.state.get_player()
-        hooks_positions = current_node.state.get_hook_positions()
-        hook_position = hooks_positions[current_player]
-
-        caught = current_node.state.get_caught()
-        player_scores = current_node.state.get_player_scores()
-
-        fish_positions = current_node.state.get_fish_positions()
-        fish_scores = current_node.state.get_fish_scores()
-
-
     def minimax(
         self,
         node: Node,
         depth: int,
         player: int,
-        alpha: float = -999999,
-        beta: float = 999999,
-    ):
-        if depth == 0 or len(node.compute_and_get_children()) == 0:
-            return self.heuristic_func(node), None
+        alpha: float,
+        beta: float,
+    ) -> float:
+        # Leave 0.15s for message sending.
+        if time.time() - self.start_time > TIME_LIMIT - 0.15:
+            raise TimeoutError
 
+        # Make caches for the same situations.
+        hooks_positions = node.state.get_hook_positions()
+        fish_positions = node.state.get_fish_positions()
+        key = str(hooks_positions) + str(fish_positions)
+        if self.cache.get(key) is not None:
+            return self.cache[key]
+
+        # No children found, then calculate the heuristic value.
+        if depth == 0 or len(node.compute_and_get_children()) == 0:
+            return self.heuristic_func(node)
+
+        # Max Player (Player 0).
         if player == 0:
             max_eval = float('-inf')
-            best_action = None
             for child in node.compute_and_get_children():
-                eval_score, _ = self.minimax(child, depth - 1, 1, alpha, beta)
+                eval_score = self.minimax(child, depth - 1, 1, alpha, beta)
                 if eval_score > max_eval:
                     max_eval = eval_score
-                    best_action = child.move
                 alpha = max(alpha, eval_score)
                 if beta <= alpha:
                     break
-            return max_eval, best_action
+            self.cache[key] = max_eval
+            return max_eval
 
+        # Min Player (Player 1).
         else:
             min_eval = float('inf')
             for child in node.compute_and_get_children():
-                eval_score, _ = self.minimax(child, depth - 1, 0, alpha, beta)
+                eval_score = self.minimax(child, depth - 1, 0, alpha, beta)
                 if eval_score < min_eval:
                     min_eval = eval_score
                 beta = min(beta, eval_score)
                 if beta <= alpha:
                     break
-            return min_eval, None
+            self.cache[key] = min_eval
+            return min_eval
 
+    def heuristic_func(
+        self,
+        node: Node,
+    ) -> float:
+
+        hooks_positions = node.state.get_hook_positions()
+        fish_positions = node.state.get_fish_positions()
+        fish_positions_keys = fish_positions.keys()
+        hook_position = hooks_positions[node.state.get_player()]
+        fish_scores = node.state.get_fish_scores()
+
+        weighted_fish_scores = []
+
+        for fish_position_key in fish_positions_keys:
+
+            fish_score = fish_scores[fish_position_key]
+            distance = self.euclidean_distance(hook_position, fish_positions[fish_position_key])
+
+            # There is a fish on the hook right now.
+            if distance == 0 and node.state.fish_scores[fish_position_key] > 0:
+                return float("inf")
+
+            # One fish left, hustle for it.
+            if len(fish_positions) == 1:
+                return fish_score / math.pow(distance, 10)
+
+            # Higher value, closer fish have higher value.
+            # e^(-x), linear tried but not worked.
+            weighted_fish_scores.append(fish_score / math.pow(distance, 10))
+
+        # No fish left. Nothing to do.
+        if len(weighted_fish_scores) == 0:
+            best_fish = 0
+        else:
+            best_fish = max(weighted_fish_scores)
+
+        # Parameter adjustment is a long and boring process.
+        return 10 * (node.state.player_scores[0] - node.state.player_scores[1]) + best_fish
 
     def search_best_next_move(self, initial_tree_node):
 
         children = initial_tree_node.compute_and_get_children()
+        best_move = 0
+        depth = 1
 
-        if len(children) == 0:
-            return ACTION_TO_STR[0]
+        while True:
+            try:
+                scores = []
+                for child in children:
+                    score = self.minimax(
+                        child, depth, 1, float("-inf"), float("inf"),
+                    )
+                    scores.append(score)
+                best_move = children[scores.index(max(scores))].move
+                depth += 1
+            except TimeoutError:
+                break
 
-        max_eval = float('-inf')
-        best_action = ACTION_TO_STR[0]
-
-        for child in children:
-            child_eval, _ = self.minimax(child, depth=5, player=1)
-            if child_eval > max_eval:
-                max_eval = child_eval
-                move = child.move if child.move is not None else 0
-                best_action = ACTION_TO_STR[move]
-
-        return best_action
+        return ACTION_TO_STR[best_move]
